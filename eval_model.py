@@ -1,0 +1,252 @@
+import numpy as np
+import json
+from PIL import Image
+from utils import GeminiLLM, ClientBasedLLM, load_api_keys, encode_image_b64
+from env import QAEnv
+import time
+import gzip
+import argparse
+import os
+
+ORACLE_MODEL_ID = "gemini-2.5-pro"
+
+parser = argparse.ArgumentParser(prog="eval-QA-model")
+parser.add_argument("start_idx", type=int)
+parser.add_argument("end_idx", type=int)
+parser.add_argument("--task-type", default="category")
+parser.add_argument("--run-type", type=str, default="train")
+parser.add_argument("--local", type=int, default=0)
+
+args = parser.parse_args()
+
+local = args.local
+
+assert args.run_type in ["train", "val"]
+
+ALLOWED_TASK_TYPES = [
+    "all",
+    "category",
+    "color",
+    "context",
+    "color_context_feature",
+    "color_feature",
+    "color_context",
+]
+
+assert args.task_type in ALLOWED_TASK_TYPES, print(
+    f"--task-type should be one among {ALLOWED_TASK_TYPES}"
+)
+
+
+def _add_obs_and_question_to_log(
+    obs, new_obs, action, observations, actions, answers, reasonings
+):
+    image = Image.fromarray(obs["image"])
+    if len(observations) == 0:
+        observations.append(image)
+        actions.append([])
+        answers.append([])
+        reasonings.append([])
+    elif image != observations[-1]:
+        observations.append(image)
+        if action["question"] is not None:
+            actions.append([f"Q: {action['question'][:200]}"])
+            answers.append([f"A: {new_obs['answer']}"])
+        else:
+            actions.append([f"C: {bool(action['conclusion'])}"])
+            answers.append([])
+        reasonings.append([action["reasoning"]])
+    else:
+        if action["question"] is not None:
+            assert new_obs["answer"] is not None
+            s = f"Q: {action['question'][:200]}"
+            answers[-1].append(f"A: {new_obs['answer']}")
+        else:
+            s = f"C: {bool(action['conclusion'])}"
+        actions[-1].append(s)
+        reasonings[-1].append(action["reasoning"])
+
+
+already_done_ids = set()
+
+# Example usage:
+if __name__ == "__main__":
+    now = str(time.time_ns())
+
+    load_api_keys()
+    # model = "gemini-3-flash-preview"
+
+    if not local:
+        oracle_client = GeminiLLM(model_id=ORACLE_MODEL_ID, temperature=1e-6)
+        print(f"[INFO] Using oracle model: {ORACLE_MODEL_ID}")
+    else:
+        oracle_model_id = os.environ["ORACLE_MODEL_ID"]
+        oracle_client = ClientBasedLLM(model_id=oracle_model_id)
+        print(f"[INFO] Using oracle model: {oracle_model_id}")
+        # TODO You can also use your oracle here
+
+    print(f"[INFO] Using oracle: {oracle_client}")
+
+    if args.task_type.lower() == "all":
+        task_types = ALLOWED_TASK_TYPES[1:]
+    else:
+        task_types = [args.task_type]
+
+    for task_type in task_types:
+        env = QAEnv(
+            oracle_client,
+            f"QA_eval/episodes_{args.run_type}.jsonl",
+            render_mode="rgb",
+            task_type=task_type,
+        )
+
+        log_data = dict(
+            id=[],
+            target_image=[],
+            task=[],
+            observations=[],
+            questions=[],
+            answers=[],
+            reasonings=[],
+            n_successes=[],
+            n_questions=[],
+            time_required=[],
+        )
+        for episode in range(args.start_idx, args.end_idx):
+            _observations = []
+            _actions = []
+            _answers = []
+            _reasonings = []
+            try:
+                old_obs, info = env.reset(options={"episode_idx": episode})
+            except IndexError as e:
+                continue
+            print(f"EPISODE: {episode}, ID: {env.current_episode_data['id']}\n")
+            if env.current_episode_data["id"] in already_done_ids:
+                print(
+                    f"I did already run episode with id '{env.current_episode_data['id']}' for subset '{task_type}'"
+                )
+                continue
+            try:
+                _add_obs_and_question_to_log(
+                    old_obs, {}, {}, _observations, _actions, _answers, _reasonings
+                )
+            except Exception as e:  # noqa
+                print("[ERROR] Error in episode number: ", episode)
+                print(str(e))
+                continue
+
+            try:
+                questioner = None  # TODO: YOUR QUESTIONER HERE
+            except Exception as e:  # noqa
+                print("[ERROR] Error in episode number: ", episode)
+                print(str(e))
+                continue
+
+            questioner.reset_time()
+            print(f"Task is: {info['task_description']}")
+
+            for step in range(200):
+                print("=============")
+                # action = ACTIONS[step]
+                try:
+                    action = questioner.ask_or_conclude(old_obs)
+                except Exception as e:  # noqa
+                    print("[ERROR] Error in episode number: ", episode)
+                    print(str(e))
+                    break
+
+                print(f"Current action: {action}")
+                obs, reward, terminated, truncated, info = env.step(action)
+
+                # TODO for some reason sometimes the env doesn't switch observation after a conclusion, especially in the training set.
+                # The bug is fixed for the heldout set. For the time being, we just break the loop as we consider this an error
+                # (Nothing will be logged if we break here)
+                # Conditions: the answer was a conclusion; the two images are the same but neither terminated nor truncated was set
+                if action["conclusion"] is not None and (
+                    np.all(obs["image"] == old_obs["image"])
+                    and not terminated
+                    and not truncated
+                ):
+                    print(
+                        "[ERROR] for some reason, no new image was supplied and this is an error"
+                    )
+                    break
+
+                if action["question"] is not None:
+                    a = ""
+                    if obs["answer"] is not None:
+                        a = obs["answer"]
+                    questioner.add_answer(a)
+                try:
+                    _add_obs_and_question_to_log(
+                        old_obs,
+                        obs,
+                        action,
+                        _observations,
+                        _actions,
+                        _answers,
+                        _reasonings,
+                    )
+                except Exception as e:  # noqa
+                    print("[ERROR] Error in episode number: ", episode)
+                    print(str(e))
+                    _add_obs_and_question_to_log(
+                        old_obs,
+                        obs,
+                        action,
+                        _observations,
+                        _actions,
+                        _answers,
+                        _reasonings,
+                    )
+                    break
+
+                # env.render()
+
+                old_obs = obs
+                if terminated or truncated:
+                    times = round(time.time() - env.initial_time, 2)
+                    try:
+                        print(f"Episode finished after {step + 1} steps")
+                        _id = env.current_episode_data["id"]
+                        _target_image = encode_image_b64(
+                            Image.open(env.current_episode_data["path"]), format="png"
+                        )
+                        _task = env.current_episode_data["tasks"][task_type]
+                        _n_successes = env.n_successes
+                        _n_questions = questioner.n_questions
+                        _time_required = round(questioner.time_required, 2)
+
+                        # Append
+                        log_data["id"].append(_id)
+                        log_data["target_image"].append(_target_image)
+                        log_data["task"].append(_task)
+                        log_data["n_successes"].append(_n_successes)
+                        log_data["n_questions"].append(_n_questions)
+                        log_data["time_required"].append(_time_required)
+                        log_data["observations"].append([
+                            encode_image_b64(o, format="png") for o in _observations
+                        ])
+                        log_data["questions"].append(_actions)
+                        log_data["answers"].append(_answers)
+                        log_data["reasonings"].append(_reasonings)
+                    except Exception as e:  # noqa
+                        print("[ERROR] Error in episode number: ", episode)
+                        print(str(e))
+                    break
+            print("\n\n")
+
+        if len(log_data["id"]) != 0:
+            print(
+                f"~~~~~~~~~~ Finished {task_type}_{args.run_type}_{str(args.start_idx)}_{str(args.end_idx)} ~~~~~~~~~~"
+            )
+            data_to_save = json.dumps(log_data).encode()
+
+            with gzip.GzipFile(
+                f"results/{questioner.__class__.__name__}_{task_type}_{args.run_type}_{str(args.start_idx)}_{str(args.end_idx)}.gzip.json",
+                "w",
+            ) as file:
+                file.write(data_to_save)
+
+        env.close()
