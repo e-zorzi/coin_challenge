@@ -38,4 +38,9 @@ We also give you a generic class, `YourQuestioner`, that you can use as a templa
 
 # Evaluation
 
-Run the file `eval_model.py` to evaluate your model. You need to add, at line 140, your oracle (or the provided ones).
+Run the file `eval_model.py` to evaluate your model. You need to add, lines 88-104, your oracle (or the provided ones). At line 155, you have to add your Questioner.
+
+This script will evaluate your questioner on the training set using the provided oracle. The training set comprises trajectories with different description level (see the paper for more information). You can choose which level of description to use by passing the argument --description-type. There are six description types, 'category', 'color', 'context', 'color_context_feature', 'color_feature', 'color_context'. You can pass 'all': in this case, the script will loop over all other types.
+
+Before running it, check the provided arguments by running 
+> python eval_model.py --help

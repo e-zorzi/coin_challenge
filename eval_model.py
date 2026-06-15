@@ -12,10 +12,10 @@ from Questioner import YourQuestioner
 ORACLE_MODEL_ID = "gemini-3-flash"
 
 parser = argparse.ArgumentParser(prog="eval-QA-model")
-parser.add_argument("start_idx", type=int)
-parser.add_argument("end_idx", type=int)
+parser.add_argument("start_idx", type=int, help="First trajectory index")
+parser.add_argument("end_idx", type=int, help="Last trajectory index")
 parser.add_argument(
-    "--task-type",
+    "--description-type",
     default="category",
     help="Type of description. Choose one among 'all', 'category', 'color', 'context', 'color_context_feature', 'color_feature', 'color_context'.",
 )
@@ -32,7 +32,7 @@ local = args.local
 
 run_type = "train"
 
-ALLOWED_TASK_TYPES = [
+ALLOWED_DESCPRITION_TYPES = [
     "all",
     "category",
     "color",
@@ -42,9 +42,8 @@ ALLOWED_TASK_TYPES = [
     "color_context",
 ]
 
-assert args.task_type in ALLOWED_TASK_TYPES, print(
-    f"--task-type should be one among {ALLOWED_TASK_TYPES}"
-)
+assert args.description_type in ALLOWED_DESCPRITION_TYPES, f"--description-type should be one among {ALLOWED_DESCPRITION_TYPES}"
+
 
 
 def _add_obs_and_question_to_log(
@@ -102,10 +101,10 @@ if __name__ == "__main__":
 
     print(f"[INFO] Using oracle: {oracle_client}")
     # --------------------------------------------------------------------------------------
-    if args.task_type.lower() == "all":
-        task_types = ALLOWED_TASK_TYPES[1:]
+    if args.description_type.lower() == "all":
+        task_types = ALLOWED_DESCPRITION_TYPES[1:]
     else:
-        task_types = [args.task_type]
+        task_types = [args.description_type]
 
     for task_type in task_types:
         env = QAEnv(
