@@ -60,7 +60,7 @@ class QAEnv(gym.Env):
         """
         super().__init__()
 
-        self.questioner = client
+        self.oracle_client = client
         self.jsonl_path = Path(jsonl_path)
         self.render_mode = render_mode
         self.image_height = image_height
@@ -171,30 +171,17 @@ class QAEnv(gym.Env):
 
     @retry(stop_max_attempt_number=5, wait_fixed=80000)
     def ask_oracle(self, prompt, image, description=None):
-        if (
-            self.questioner.__class__ == GeminiLLM
-            or self.questioner.__class__ == ClientBasedLLM
-        ):
-            return self.questioner.ask(
-                prompt=prompt,
-                images=[image],
-            )
-        else:
-            raise NotImplementedError("Implement your oracle logic here")
+        return self.oracle_client.ask(
+            prompt=prompt,
+            images=[image],
+        )
 
     def _get_observation(self, question: str = None) -> np.ndarray:
         """Extract observation from current episode data and step."""
         prompt_to_use = ANSWER_PROMPT.format(QUESTION=question)
         answer = None
         if question is not None:
-            if self.questioner.__class__.__name__ == "LocalUser":
-                answer = self.ask_oracle(
-                    prompt_to_use,
-                    self.current_target_image,
-                    description=self.current_episode_data["tasks"][self.task_type],
-                )
-            else:
-                answer = self.ask_oracle(prompt_to_use, self.current_target_image)
+            answer = self.ask_oracle(prompt_to_use, self.current_target_image)
         return dict(
             # Current observation (based on the current obs index)
             image=np.array(
@@ -250,7 +237,7 @@ class QAEnv(gym.Env):
             "step": self.current_step,
             "n_questions": self.n_questions,
             "task_image": self.current_target_image,
-            "task_description": self.current_episode_data["tasks"][self.task_type],
+            "target_description": self.current_episode_data["tasks"][self.task_type],
             "new_distractor": False,
         }
         return info

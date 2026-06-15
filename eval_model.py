@@ -7,21 +7,30 @@ import time
 import gzip
 import argparse
 import os
+from Questioner import YourQuestioner
 
-ORACLE_MODEL_ID = "gemini-2.5-pro"
+ORACLE_MODEL_ID = "gemini-3-flash"
 
 parser = argparse.ArgumentParser(prog="eval-QA-model")
 parser.add_argument("start_idx", type=int)
 parser.add_argument("end_idx", type=int)
-parser.add_argument("--task-type", default="category")
-parser.add_argument("--run-type", type=str, default="train")
-parser.add_argument("--local", type=int, default=0)
+parser.add_argument(
+    "--task-type",
+    default="category",
+    help="Type of description. Choose one among 'all', 'category', 'color', 'context', 'color_context_feature', 'color_feature', 'color_context'.",
+)
+parser.add_argument(
+    "--local",
+    type=int,
+    default=0,
+    help="If 1, will use a local VLM (run from VLLM) as oracle; if 0, will use Gemini API as oracle.",
+)
 
 args = parser.parse_args()
 
 local = args.local
 
-assert args.run_type in ["train", "val"]
+run_type = "train"
 
 ALLOWED_TASK_TYPES = [
     "all",
@@ -76,17 +85,23 @@ if __name__ == "__main__":
     load_api_keys()
     # model = "gemini-3-flash-preview"
 
+    # -------------------------------------- ORACLE ----------------------------------------
+    # if you want to use a custom oracle, you have to change these lines. You can
+    # implement it however you want, but it should inher it from the class OracleInterace
+    # (see file Oracle.py)
     if not local:
         oracle_client = GeminiLLM(model_id=ORACLE_MODEL_ID, temperature=1e-6)
         print(f"[INFO] Using oracle model: {ORACLE_MODEL_ID}")
     else:
         oracle_model_id = os.environ["ORACLE_MODEL_ID"]
         oracle_client = ClientBasedLLM(model_id=oracle_model_id)
+        ## Or you can use your oracle here
+        # oracle_client = YourOracle
         print(f"[INFO] Using oracle model: {oracle_model_id}")
         # TODO You can also use your oracle here
 
     print(f"[INFO] Using oracle: {oracle_client}")
-
+    # --------------------------------------------------------------------------------------
     if args.task_type.lower() == "all":
         task_types = ALLOWED_TASK_TYPES[1:]
     else:
@@ -95,7 +110,7 @@ if __name__ == "__main__":
     for task_type in task_types:
         env = QAEnv(
             oracle_client,
-            f"QA_eval/episodes_{args.run_type}.jsonl",
+            f"QA_eval/episodes_{run_type}.jsonl",
             render_mode="rgb",
             task_type=task_type,
         )
@@ -137,11 +152,11 @@ if __name__ == "__main__":
                 continue
 
             try:
-                questioner = None  # TODO: YOUR QUESTIONER HERE
-            except Exception as e:  # noqa
-                print("[ERROR] Error in episode number: ", episode)
-                print(str(e))
-                continue
+                questioner = YourQuestioner(info)  # TODO: YOUR QUESTIONER HERE
+            except:  # noqa
+                raise NotImplementedError(
+                    "Insert here your Questioner class. See the README for more details."
+                )
 
             questioner.reset_time()
             print(f"Task is: {info['task_description']}")
@@ -239,12 +254,12 @@ if __name__ == "__main__":
 
         if len(log_data["id"]) != 0:
             print(
-                f"~~~~~~~~~~ Finished {task_type}_{args.run_type}_{str(args.start_idx)}_{str(args.end_idx)} ~~~~~~~~~~"
+                f"~~~~~~~~~~ Finished {task_type}_{run_type}_{str(args.start_idx)}_{str(args.end_idx)} ~~~~~~~~~~"
             )
             data_to_save = json.dumps(log_data).encode()
 
             with gzip.GzipFile(
-                f"results/{questioner.__class__.__name__}_{task_type}_{args.run_type}_{str(args.start_idx)}_{str(args.end_idx)}.gzip.json",
+                f"results/{questioner.__class__.__name__}_{task_type}_{run_type}_{str(args.start_idx)}_{str(args.end_idx)}.gzip.json",
                 "w",
             ) as file:
                 file.write(data_to_save)

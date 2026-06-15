@@ -498,6 +498,8 @@ class OpenAILLM(IRemoteLLM):
 
 @define(kw_only=True, auto_attribs=True)
 class ClientBasedLLM(OpenAILLM):
+    """Client that handles a VLLM connection. The model_id passed to __init__ should match the model running via VLLM."""
+
     api_key: str = field(default="EMPTY")
     _port: int = field(default=8000)
     _url: Optional[str] = None
